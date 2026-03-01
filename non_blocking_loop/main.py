@@ -33,7 +33,7 @@ async def heartbeat():
 async def main():
     async with asyncio.TaskGroup() as tg:
         tg.create_task(heartbeat())
-        tg.create_task(heavy_serialization())
+        tg.create_task(heavy_serializer())
 
 
 asyncio.run(main())
