@@ -1,60 +1,97 @@
 import asyncio
+import functools
 import linecache
 import logging
 import sys
+import threading
 import time
 import traceback
 import warnings
-from asyncio import AbstractEventLoop
-from threading import Event, Thread, current_thread
+from asyncio import AbstractEventLoop, Task
 from traceback import FrameSummary, StackSummary
 from types import FrameType
+from typing import Any, Callable, Coroutine, ParamSpec, TypeVar
+
+BLOCKING_THRESHOLD: float = 0.1
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+AsyncFunc = Callable[P, Coroutine[Any, Any, T]]
 
 
-class LoopBlockDetector:
+def detect_blocking(
+    threshold: float = 0.1, action: str = "warn"
+) -> Callable[[AsyncFunc[P, T]], AsyncFunc[P, T]]:
+    def decorator(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
+        @functools.wraps(func)
+        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+            loop: AbstractEventLoop = asyncio.get_running_loop()
+            current_task: Task[T] | None = asyncio.current_task()
+            loop_thread_id: int | None = threading.current_thread().ident
+            if current_task is None or loop_thread_id is None:
+                raise RuntimeError(
+                    "detect_blocking должен использоваться внутри event loop"
+                )
+            blocker: _LoopBlockDetector = _LoopBlockDetector(
+                loop,
+                threshold,
+                action,
+                func.__name__,
+                current_task,
+                loop_thread_id,
+            )
+            blocker.start()
+            try:
+                return await func(*args, **kwargs)
+            except asyncio.CancelledError as e:
+                if action == "raise":
+                    raise RuntimeError(str(e)) from None
+                raise
+            finally:
+                blocker.stop()
+
+        return wrapper
+
+    return decorator
+
+
+class _LoopBlockDetector:
     __slots__ = (
-        "_action",
-        "_fired",
         "_loop",
         "_threshold",
-        "_last_ping",
-        "_running",
-        "_stop_event",
-        "_thread",
+        "_action",
+        "_func_name",
         "_task",
         "_loop_thread_id",
+        "_last_ping",
+        "_running",
+        "_fired",
+        "_stop_event",
+        "_thread",
     )
 
     def __init__(
         self,
         loop: AbstractEventLoop,
         threshold: float,
-        loop_thread_id: int,
         action: str,
-        task: asyncio.Task[None],
+        func_name: str,
+        task: Task[Any],
+        loop_thread_id: int,
     ) -> None:
 
         self._loop: AbstractEventLoop = loop
         self._threshold: float = threshold
+        self._action: str = action
+        self._func_name: str = func_name
+        self._task: Task[Any] = task
+        self._loop_thread_id: int = loop_thread_id
         self._last_ping: float = time.monotonic()
         self._running: bool = False
-        self._stop_event: Event = Event()
-        self._thread: Thread | None = None
         self._fired: bool = False
-        self._loop_thread_id: int = loop_thread_id
-        self._action: str = action
-        self._task: asyncio.Task[None] = task
-
-    def _schedule_ping(self) -> None:
-        if self._running:
-            now: float = time.monotonic()
-            lag: float = now - self._last_ping
-            print(f"[ping] такт, отставание: {lag * 1000:.1f} мс")
-            self._last_ping = now
-            self._loop.call_later(
-                self._threshold / 2,
-                self._schedule_ping,
-            )
+        self._stop_event: threading.Event = threading.Event()
+        self._thread: threading.Thread | None = None
 
     def _capture_stack(self) -> str:
         frames: dict[int, FrameType] = sys._current_frames()
@@ -84,7 +121,8 @@ class LoopBlockDetector:
                 frame_info.filename, frame_info.lineno or 0
             ).strip()
             lines.append(
-                f'  File "{frame_info.filename}", line {frame_info.lineno}, in {frame_info.name}\n    {line_src}\n'
+                f'  File "{frame_info.filename}", line {frame_info.lineno}, '
+                f"in {frame_info.name}\n    {line_src}\n"
             )
 
         if filtered:
@@ -95,6 +133,11 @@ class LoopBlockDetector:
 
         return "".join(lines)
 
+    def _schedule_ping(self) -> None:
+        if self._running:
+            self._last_ping = time.monotonic()
+            self._loop.call_later(self._threshold / 2, self._schedule_ping)
+
     def _watchdog(self) -> None:
         while not self._stop_event.wait(timeout=self._threshold):
             if self._fired:
@@ -104,7 +147,7 @@ class LoopBlockDetector:
                 stack_trace: str = self._capture_stack()
                 msg: str = (
                     f"\n{'=' * 60}\n"
-                    f"[EventLoopBlock] loop заблокирован "
+                    f"[EventLoopBlock] '{self._func_name}' заблокировал loop "
                     f"на {lag:.3f}s (порог: {self._threshold}s)\n"
                     f"{stack_trace}\n"
                     f"{'=' * 60}"
@@ -128,7 +171,7 @@ class LoopBlockDetector:
         self._last_ping = time.monotonic()
         self._stop_event.clear()
         self._schedule_ping()
-        self._thread = Thread(target=self._watchdog, daemon=True)
+        self._thread = threading.Thread(target=self._watchdog, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -136,40 +179,3 @@ class LoopBlockDetector:
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=self._threshold * 2)
-
-
-def blocking_op() -> None:
-    time.sleep(0.5)
-
-
-async def main() -> None:
-    loop: AbstractEventLoop = asyncio.get_running_loop()
-    loop_thread_id: int | None = current_thread().ident
-    current_task: asyncio.Task[None] | None = asyncio.current_task()
-    if loop_thread_id is None or current_task is None:
-        raise RuntimeError("не удалось получить thread id или текущую задачу")
-    detector: LoopBlockDetector = LoopBlockDetector(
-        loop,
-        threshold=0.1,
-        loop_thread_id=loop_thread_id,
-        action="raise",
-        task=current_task,
-    )
-    detector.start()
-    print("[detector] запущен")
-    print("[watchdog] сторожевой поток запущен")
-
-    print("\n--- нормальная работа ---")
-    await asyncio.sleep(0.3)
-
-    print("\n--- блокируем цикл событий на 500 мс ---")
-    blocking_op()
-
-    # даём циклу событий восстановиться
-    await asyncio.sleep(0.3)
-
-    detector.stop()
-    print("[detector] остановлен")
-
-
-asyncio.run(main())

@@ -22,7 +22,7 @@ class LoopBlockDetector:
         self._stop_event: Event = Event()
         self._thread: Thread | None = None
 
-    def _schedule_ping(self):
+    def _schedule_ping(self) -> None:
         if self._running:
             now: float = time.monotonic()
             lag: float = now - self._last_ping
@@ -33,18 +33,18 @@ class LoopBlockDetector:
                 self._schedule_ping,
             )
 
-    def start(self):
+    def start(self) -> None:
         self._running = True
         self._last_ping = time.monotonic()
         self._stop_event.clear()
         self._schedule_ping()
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
         self._stop_event.set()
 
 
-async def main():
+async def main() -> None:
     loop: AbstractEventLoop = asyncio.get_running_loop()
     detector: LoopBlockDetector = LoopBlockDetector(loop, threshold=0.1)
     detector.start()

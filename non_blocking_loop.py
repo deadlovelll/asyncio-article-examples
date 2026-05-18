@@ -40,28 +40,33 @@
 
 
 import asyncio
+from types import FrameType
 
-async def foo():
+
+async def foo() -> None:
     for i in range(3):
         print(f"foo step {i}")
         await asyncio.sleep(1)
 
-async def monitor():
+
+async def monitor() -> None:
     while True:
         for task in asyncio.all_tasks():
             if task.done():
                 continue
-            stack = task.get_stack()
+            stack: list[FrameType] = task.get_stack()
             if stack:
                 print(f"Task {task} current stack:")
                 for frame in stack:
                     print(f"  {frame.f_code.co_name} at {frame.f_lineno}")
         await asyncio.sleep(0.5)
 
-async def main():
-    t1 = asyncio.create_task(foo())
-    t2 = asyncio.create_task(monitor())
+
+async def main() -> None:
+    t1: asyncio.Task[None] = asyncio.create_task(foo())
+    t2: asyncio.Task[None] = asyncio.create_task(monitor())
     await t1
     t2.cancel()
+
 
 asyncio.run(main())

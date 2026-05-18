@@ -24,7 +24,7 @@ class LoopBlockDetector:
         self._thread: Thread | None = None
         self._fired: bool = False
 
-    def _schedule_ping(self):
+    def _schedule_ping(self) -> None:
         if self._running:
             now: float = time.monotonic()
             lag: float = now - self._last_ping
@@ -35,11 +35,11 @@ class LoopBlockDetector:
                 self._schedule_ping,
             )
 
-    def _watchdog(self):
+    def _watchdog(self) -> None:
         while not self._stop_event.wait(timeout=self._threshold):
             if self._fired:
                 break
-            lag = time.monotonic() - self._last_ping
+            lag: float = time.monotonic() - self._last_ping
             if lag > self._threshold:
                 self._fired = True
                 print(
@@ -47,7 +47,7 @@ class LoopBlockDetector:
                     f"отставание {lag*1000:.1f} мс"
                 )
 
-    def start(self):
+    def start(self) -> None:
         self._running = True
         self._fired = False
         self._last_ping = time.monotonic()
@@ -56,16 +56,16 @@ class LoopBlockDetector:
         self._thread = Thread(target=self._watchdog, daemon=True)
         self._thread.start()
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=self._threshold * 2)
 
 
-async def main():
-    loop = asyncio.get_running_loop()
-    detector = LoopBlockDetector(loop, threshold=0.1)
+async def main() -> None:
+    loop: AbstractEventLoop = asyncio.get_running_loop()
+    detector: LoopBlockDetector = LoopBlockDetector(loop, threshold=0.1)
     detector.start()
     print("[detector] запущен")
     print("[watchdog] сторожевой поток запущен")

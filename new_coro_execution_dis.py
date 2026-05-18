@@ -1,8 +1,9 @@
 import dis
+from typing import Any, Coroutine
 
 
-async def victim():
-    x = "alive"
+async def victim() -> str:
+    x: str = "alive"
     return x
 
 
@@ -10,7 +11,7 @@ print("=== bytecode of victim ===")
 dis.dis(victim)
 print()
 
-c = victim()
+c: Coroutine[Any, Any, str] = victim()
 
 try:
     c.send(42)

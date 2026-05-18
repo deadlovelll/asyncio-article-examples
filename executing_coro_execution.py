@@ -1,17 +1,20 @@
-class Reenter:
-    def __init__(self, target):
-        self.target = target
+from typing import Any, Coroutine, Generator
 
-    def __await__(self):
+
+class Reenter:
+    def __init__(self, target: Coroutine[Any, Any, None]) -> None:
+        self.target: Coroutine[Any, Any, None] = target
+
+    def __await__(self) -> Generator[None, None, None]:
         self.target.send(None)
         yield
 
 
-async def victim():
-    x = 123
+async def victim() -> None:
+    x: int = 123
     await Reenter(c)
     print("after, x =", x)
 
 
-c = victim()
+c: Coroutine[Any, Any, None] = victim()
 c.send(None)
