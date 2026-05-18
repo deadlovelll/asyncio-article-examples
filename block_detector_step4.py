@@ -21,7 +21,7 @@ AsyncFunc = Callable[P, Coroutine[Any, Any, T]]
 
 
 def detect_blocking(
-    threshold: float = 0.1, action: str = "warn"
+    threshold: float = 0.1, action: str = "raise"
 ) -> Callable[[AsyncFunc[P, T]], AsyncFunc[P, T]]:
     def decorator(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
         @functools.wraps(func)
@@ -33,7 +33,7 @@ def detect_blocking(
                 raise RuntimeError(
                     "detect_blocking должен использоваться внутри event loop"
                 )
-            blocker: _LoopBlockDetector = _LoopBlockDetector(
+            blocker: LoopBlockDetector = LoopBlockDetector(
                 loop,
                 threshold,
                 action,
@@ -56,7 +56,7 @@ def detect_blocking(
     return decorator
 
 
-class _LoopBlockDetector:
+class LoopBlockDetector:
     __slots__ = (
         "_loop",
         "_threshold",
